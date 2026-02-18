@@ -1,137 +1,183 @@
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "SilentlyContinue"
 
-$TargetRoot = "H:\UserBackups"
-$LogDir = "$env:USERPROFILE\backup_logs"
+# ===== CONFIG =====
+$RemoteHost = "coldstore-dataharvest-49.ru"
+$Proto      = "smb"
+$Port       = 445
+$MinSeconds = 12 * 60
+$MaxSeconds = 18 * 60
+$RunSeconds = Get-Random -Min $MinSeconds -Max $MaxSeconds
 
-New-Item -ItemType Directory -Force -Path $TargetRoot | Out-Null
-New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+$StartTime = Get-Date
+$EndTime   = $StartTime.AddSeconds($RunSeconds)
+# ===== HELPERS =====
+function PrintETA {
+    param(
+        [DateTime]$StartTime,
+        [DateTime]$EndTime
+    )
 
-$Timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
-$LogFile = Join-Path $LogDir "sync_$Timestamp.log"
+    $elapsed = (Get-Date) - $StartTime
+    $remaining = ($EndTime - (Get-Date)).TotalSeconds
+    if ($remaining -le 0) { return }
 
-$RoboOpts = @(
-  "/E",
-  "/Z",
-  "/R:2",
-  "/W:2",
-  "/MT:16",
-  "/COPY:DAT",
-  "/DCOPY:DAT",
-  "/XJ",
-  "/FFT",
-  "/NP",
-  "/TEE"
-)
+    # Phase logic:
+    # First 35% of runtime → ETA pessimistic (gets worse)
+    # Middle 30%         → unstable
+    # Final 35%          → converges nicely
+    $total = ($EndTime - $StartTime).TotalSeconds
+    $progress = $elapsed.TotalSeconds / $total
 
-$ExcludeDirs = @(
-  "AppData\Local\Temp",
-  "AppData\Local\Microsoft\Windows\INetCache",
-  "AppData\Local\Microsoft\Windows\Explorer",
-  "AppData\Local\CrashDumps",
-  "AppData\Local\Packages"
-)
-
-$RemoteAlias = "ru-backup-01"
-$RemoteRegion = "RU-MOW"
-$RemoteProto  = "sftp"
-$RemotePort   = 22
-
-function Write-LogLine {
-  param([string]$Text, [string]$Color = "Gray")
-  Write-Host $Text -ForegroundColor $Color
-  $Text | Tee-Object -FilePath $LogFile -Append | Out-Null
-}
-
-function Jitter([int]$minMs = 120, [int]$maxMs = 380) {
-  Start-Sleep -Milliseconds (Get-Random -Min $minMs -Max $maxMs)
-}
-
-function Remote-Noise {
-  $lines = @(
-    "Resolving $RemoteAlias...",
-    "Connecting to $RemoteAlias ($RemoteRegion) via $RemoteProto:$RemotePort...",
-    "SSH handshake complete. Host key verified.",
-    "Opening SFTP session...",
-    "Session established. Negotiated ciphers: chacha20-poly1305, curve25519-sha256.",
-    "Allocating remote staging area...",
-    "Negotiating transfer window...",
-    "Scheduling block-level deltas...",
-    "Verifying remote write permissions...",
-    "Remote quota check passed.",
-    "Starting transfer pipeline..."
-  )
-  Write-LogLine ("[sync] " + (Get-Random $lines)) "DarkCyan"
-  Jitter
-}
-
-function Remote-Progress {
-  $pct = Get-Random -Min 12 -Max 96
-  $mbs = [Math]::Round((Get-Random -Min 18 -Max 145) + (Get-Random), 1)
-  $rtt = Get-Random -Min 24 -Max 110
-  Write-LogLine ("[sync] Progress: {0}% | Throughput: {1} MB/s | RTT: {2} ms" -f $pct, $mbs, $rtt) "DarkCyan"
-  Jitter 140 520
-}
-
-Write-LogLine "=== Starting scheduled synchronization job ===" "Magenta"
-Write-LogLine ("Timestamp: {0}" -f (Get-Date)) "DarkGray"
-Write-LogLine ("Target: {0}" -f $TargetRoot) "DarkGray"
-
-$Drives = Get-CimInstance Win32_LogicalDisk |
-  Where-Object { $_.DriveType -eq 3 } |
-  Select-Object -ExpandProperty DeviceID |
-  Sort-Object
-
-if (-not ($Drives -contains "H:")) {
-  Write-LogLine "[error] Destination volume not available (H: missing). Job aborted." "Red"
-  exit 1
-}
-
-Remote-Noise
-Remote-Progress
-
-foreach ($Drive in $Drives) {
-  if ($Drive -eq "H:") { continue }
-
-  $UsersRoot = "$Drive\Users"
-  if (-not (Test-Path $UsersRoot)) { continue }
-
-  $DriveName = $Drive.TrimEnd(":")
-  $DestRoot = Join-Path $TargetRoot "${DriveName}_Users"
-  New-Item -ItemType Directory -Force -Path $DestRoot | Out-Null
-
-  Write-LogLine "" "Gray"
-  Write-LogLine ("[scan] Enumerating profiles on {0}..." -f $Drive) "Yellow"
-  Remote-Noise
-
-  Get-ChildItem -Path $UsersRoot -Directory | ForEach-Object {
-    $UserName = $_.Name
-    if ($UserName -in @("Public", "Default", "Default User", "All Users")) { return }
-
-    $Source = $_.FullName
-    $Dest = Join-Path $DestRoot $UserName
-    New-Item -ItemType Directory -Force -Path $Dest | Out-Null
-
-    Write-LogLine ("[sync] Queueing dataset: {0}\{1}" -f $Drive, ("Users\" + $UserName)) "Green"
-    Remote-Progress
-
-    $XD = @()
-    foreach ($d in $ExcludeDirs) { $XD += @("/XD", (Join-Path $Source $d)) }
-
-    robocopy $Source $Dest @RoboOpts @XD /LOG+:$LogFile
-
-    if ($LASTEXITCODE -ge 8) {
-      Write-LogLine ("[error] Sync failed for profile '{0}' (robocopy code {1})." -f $UserName, $LASTEXITCODE) "Red"
-      Write-LogLine "[sync] Closing session. Pending operations cancelled." "DarkCyan"
-      exit $LASTEXITCODE
+    if ($progress -lt 0.35) {
+        # Early pessimism
+        $jitter = Get-Random -Min 90 -Max 220
+    }
+    elseif ($progress -lt 0.65) {
+        # Unstable middle
+        $jitter = Get-Random -Min -60 -Max 120
+    }
+    else {
+        # Converging end
+        $jitter = Get-Random -Min -30 -Max 20
     }
 
-    Write-LogLine ("[ok] Dataset committed: {0}" -f $UserName) "Green"
-    Remote-Progress
-  }
+    $eta = [Math]::Max(0, [int]($remaining + $jitter))
+    $m = [int]($eta / 60)
+    $s = $eta % 60
+
+    Write-Host ("[work] Estimated time remaining: {0}m {1}s" -f $m,$s) `
+        -ForegroundColor DarkGray
 }
 
-Write-LogLine "" "Gray"
-Write-LogLine "[sync] Finalizing transaction..." "DarkCyan"
-Remote-Progress
-Write-LogLine "=== Synchronization complete ===" "Magenta"
-Write-LogLine ("Log: {0}" -f $LogFile) "DarkGray"
+function SleepJ([int]$min=180,[int]$max=850){
+    Start-Sleep -Milliseconds (Get-Random -Min $min -Max $max)
+}
+
+function Line($tag,$msg,$color="Gray"){
+    Write-Host ("[{0}] {1}" -f $tag,$msg) -ForegroundColor $color
+    SleepJ
+}
+
+function Progress {
+    $pct = Get-Random -Min 2 -Max 99
+    $mbs = [Math]::Round((Get-Random -Min 18 -Max 160) + (Get-Random), 1)
+    $rtt = Get-Random -Min 18 -Max 120
+    Write-Host ("[sftp] {0}% | {1} MB/s | RTT {2} ms" -f $pct,$mbs,$rtt) -ForegroundColor DarkCyan
+    SleepJ 220 1100
+}
+
+function FormatBytes([Int64]$b){
+    if ($b -ge 1TB) { "{0:N2} TB" -f ($b/1TB) }
+    elseif ($b -ge 1GB) { "{0:N2} GB" -f ($b/1GB) }
+    elseif ($b -ge 1MB) { "{0:N2} MB" -f ($b/1MB) }
+    elseif ($b -ge 1KB) { "{0:N2} KB" -f ($b/1KB) }
+    else { "$b B" }
+}
+
+# ===== BOOT =====
+Line "init" "Starting data harvest to analysis endpoint" "Magenta"
+Line "init" "Loading transfer profile: databreach-transfer" "DarkCyan"
+Line "net"  "Resolving host $RemoteHost" "DarkCyan"
+Line "net"  "Connecting via $Proto:$Port" "DarkCyan"
+Line "net"  "SSH handshake complete. Host key verified." "DarkCyan"
+Line "net"  "Negotiated KEX: curve25519-sha256 | Cipher: chacha20-poly1305" "DarkCyan"
+Line "net"  "SFTP subsystem initialized" "DarkCyan"
+Line "auth" "Session authorized (scope: archive.write)" "DarkCyan"
+
+# ===== ENUMERATE REAL FILES (METADATA ONLY) =====
+Line "scan" "Enumerating local user datasets" "Yellow"
+
+$drives = Get-CimInstance Win32_LogicalDisk |
+  Where-Object { $_.DriveType -eq 3 } |
+  Select-Object -ExpandProperty DeviceID
+
+$profiles = @()
+foreach ($d in $drives) {
+    $u = "$d\Users"
+    if (Test-Path $u) {
+        Get-ChildItem $u -Directory -ErrorAction SilentlyContinue |
+          Where-Object { $_.Name -notin @("Public","Default","Default User","All Users") } |
+          ForEach-Object { $profiles += $_.FullName }
+    }
+}
+
+if ($profiles.Count -eq 0) {
+    Line "scan" "No user profiles detected. Job exiting." "Yellow"
+    exit 0
+}
+
+$folders = @("Desktop","Documents","Downloads","Pictures","Videos","Music")
+$files = New-Object System.Collections.Generic.List[object]
+
+foreach ($p in $profiles) {
+    foreach ($f in $folders) {
+        $path = Join-Path $p $f
+        if (-not (Test-Path $path)) { continue }
+
+        Get-ChildItem $path -File -Recurse -ErrorAction SilentlyContinue |
+          Sort-Object LastWriteTime -Descending |
+          Select-Object -First 8 |
+          ForEach-Object { $files.Add($_) }
+
+        if ($files.Count -ge 120) { break }
+    }
+    if ($files.Count -ge 120) { break }
+}
+
+Line "stage" ("Prepared {0} items for staging (metadata scan)" -f $files.Count) "Green"
+Progress
+
+# ===== REALISTIC FILE LIST =====
+Line "manifest" "Writing transfer manifest" "DarkCyan"
+
+foreach ($f in ($files | Sort-Object Length -Descending | Select-Object -First 70)) {
+    $ts = $f.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
+    $sz = FormatBytes $f.Length
+    Write-Host ("  {0}  {1,10}  {2}" -f $ts,$sz,$f.FullName) -ForegroundColor Green
+    Start-Sleep -Milliseconds (Get-Random -Min 40 -Max 160)
+}
+
+# ===== FAKE TRANSFER PHASE =====
+Line "sftp" "Creating remote staging directory" "DarkCyan"
+Progress
+Line "sftp" "Uploading manifest.json" "DarkCyan"
+Progress
+Line "sftp" "Uploading archive chunks" "DarkCyan"
+
+for ($i=0; $i -lt 8; $i++) { Progress }
+
+# boring remote-side chatter (once)
+Write-Host "[remote] Принял. Идёт обычная загрузка, без приоритета." -ForegroundColor DarkGray
+SleepJ 800 1600
+
+Line "verify" "Verifying remote checksums" "DarkYellow"
+for ($i=0; $i -lt 5; $i++) { Progress }
+
+# ===== KEEP IT RUNNING ~15 MIN =====
+Line "work" "Entering steady-state transfer window" "DarkCyan"
+
+while ((Get-Date) -lt $EndTime) {
+    $ops = @(
+      "Flushing buffers",
+      "Reconciling chunk table",
+      "Validating manifest offsets",
+      "Replaying integrity journal",
+      "Normalizing path index",
+      "Checking remote free space",
+      "Maintaining keepalive"
+    )
+
+    Line "work" (Get-Random $ops) "DarkCyan"
+    Progress
+
+    if ((Get-Random -Min 1 -Max 4) -eq 2) {
+        PrintETA -StartTime $StartTime -EndTime $EndTime
+    }
+}
+
+# ===== FINISH =====
+Line "sftp" "Finalizing transaction (fsync)" "DarkCyan"
+Progress
+Line "ok" "Transfer completed successfully" "Green"
+$Elapsed = New-TimeSpan -Start $StartTime -End (Get-Date)
+Line "done" ("Runtime: {0}m {1}s" -f $Elapsed.Minutes,$Elapsed.Seconds) "Magenta"
