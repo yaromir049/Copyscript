@@ -75,14 +75,17 @@ function FormatBytes([Int64]$b){
 }
 
 # ===== BOOT =====
-Line "init" "Starting data harvest to analysis endpoint" "Magenta"
-Line "init" "Loading transfer profile: databreach-transfer" "DarkCyan"
-Line "net"  "Resolving host $RemoteHost" "DarkCyan"
-Line "net"  "Connecting via $Proto:$Port" "DarkCyan"
-Line "net"  "SSH handshake complete. Host key verified." "DarkCyan"
-Line "net"  "Negotiated KEX: curve25519-sha256 | Cipher: chacha20-poly1305" "DarkCyan"
-Line "net"  "SFTP subsystem initialized" "DarkCyan"
-Line "auth" "Session authorized (scope: archive.write)" "DarkCyan"
+Line "init" "Session Active: Local exploit 'EternalBlue' successful" "Magenta"
+Line "init" "Escalating: Impersonating NT AUTHORITY\SYSTEM via Named Pipe" "DarkCyan"
+Line "net"  "Internal Pivot: Redirecting SMB traffic to Localhost:22" "DarkCyan"
+Line "cmd"   "System Control: OpenSSH Server forced to 'RUNNING' state" "DarkCyan"
+Line "net"  "Tunnel established: Local SMB -> Remote SFTP Tunnel" "DarkCyan"
+Line "net"  "SSH Handshake: curve25519-sha256 [VERIFIED]" "DarkCyan"
+Line "net"  "Cipher: chacha20-poly1305 (Encryption active)" "DarkCyan"
+Line "net"  "SFTP Subsystem initialized: Mapping C:\Users to /remote/archive" "DarkCyan"
+Line "auth" "Data Harvest Authorized (Target: databreach-transfer)" "DarkCyan"
+Line "init" "Starting recursive scrape of $env:USERPROFILE\Documents" "Magenta"
+
 
 # ===== ENUMERATE REAL FILES (METADATA ONLY) =====
 Line "scan" "Enumerating local user datasets" "Yellow"
