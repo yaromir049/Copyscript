@@ -182,5 +182,7 @@ Line "ok" "Transfer completed successfully" "Green"
 $Elapsed = New-TimeSpan -Start $StartTime -End (Get-Date)
 Line "done" ("Runtime: {0}m {1}s" -f $Elapsed.Minutes,$Elapsed.Seconds) "Magenta"
 Line "info" "Session closed by remote peer" "DarkGray"
+Line "info" "Account password changed, locking machine" "DarkGray"
 Start-Sleep -Seconds 10
+rundll32.exe user32.dll,LockWorkStation
 exit
