@@ -181,3 +181,5 @@ Progress
 Line "ok" "Transfer completed successfully" "Green"
 $Elapsed = New-TimeSpan -Start $StartTime -End (Get-Date)
 Line "done" ("Runtime: {0}m {1}s" -f $Elapsed.Minutes,$Elapsed.Seconds) "Magenta"
+Start-Sleep -Seconds 10
+exit
